@@ -59,6 +59,8 @@ sheet1 = Sheet.with_name("First")
   # Filter dropdowns on the header row. With no range, the filter covers the
   # sheet's used range; pass "A1:F10" to choose one.
   |> Sheet.set_auto_filter("A1:F8")
+  # A note: the yellow box shown when the pointer rests on the cell.
+  |> Sheet.set_note("E6", "Sum of the five numbers above.", author: "Example")
   # Print landscape, every column on one page width.
   |> Sheet.set_page_setup(orientation: :landscape, fit_to_width: 1)
 

@@ -2,7 +2,7 @@ defmodule Elixlsx.Mixfile do
   use Mix.Project
 
   @source_url "https://github.com/tmepple/elixlsx"
-  @version "0.7.0"
+  @version "0.8.0"
 
   def project do
     [

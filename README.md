@@ -22,6 +22,7 @@ Features:
 - Font and cell background color, borders
 - Merged cells
 - Auto filters, page setup (orientation, fit to page)
+- Cell notes
 - Formulas, with an optional cached value
 
 
@@ -31,7 +32,7 @@ Elixlsx requires Elixir 1.12 or above. This fork is installed from GitHub, pinne
 
 ```elixir
 defp deps do
-  [{:elixlsx, github: "tmepple/elixlsx", tag: "v0.7.0"}]
+  [{:elixlsx, github: "tmepple/elixlsx", tag: "v0.8.0"}]
 end
 ```
 

@@ -31,7 +31,8 @@ defmodule Elixlsx.Sheet do
             show_grid_lines: true,
             data_validations: [],
             auto_filter: nil,
-            page_setup: []
+            page_setup: [],
+            notes: %{}
 
   @type t :: %Sheet{
           name: String.t(),
@@ -45,8 +46,10 @@ defmodule Elixlsx.Sheet do
           show_grid_lines: boolean(),
           data_validations: list({String.t(), String.t(), list(String.t()) | String.t()}),
           auto_filter: nil | true | String.t(),
-          page_setup: Keyword.t()
+          page_setup: Keyword.t(),
+          notes: %{optional(String.t()) => note}
         }
+  @type note :: %{text: String.t(), author: String.t(), width: number | nil, height: number | nil}
   @type rowcol_group :: Range.t() | {Range.t(), opts :: keyword}
 
   @doc ~S"""
@@ -300,6 +303,71 @@ defmodule Elixlsx.Sheet do
     case rows |> Enum.map(&length/1) |> Enum.max(fn -> 0 end) do
       0 -> nil
       last_col -> "A1:" <> Util.to_excel_coords(length(rows), last_col)
+    end
+  end
+
+  @a1_cell ~r/^\$?([A-Z]{1,3})\$?([1-9]\d*)$/
+
+  @spec set_note(Sheet.t(), String.t(), String.t(), Keyword.t()) :: Sheet.t()
+  @doc ~S"""
+  Attaches a note to a cell: the yellow box shown when the pointer rests on a
+  cell with a red corner mark. A cell holds one note; setting another replaces
+  it. The cell does not need to have content.
+
+  Excel 365 calls this a "Note". Its threaded "Comments" are a different
+  feature and are not written by this library.
+
+  ## Options
+
+    - `author`: recorded with the note (default `""`). Excel does not show it
+      in the box unless it is part of the text.
+    - `width`, `height`: size of the box in points. The width defaults to 200
+      and the height is estimated from the text.
+
+  ## Examples
+
+      iex> sheet = Elixlsx.Sheet.set_note(%Elixlsx.Sheet{}, "B2", "Typed in by hand", author: "Ada")
+      iex> sheet.notes
+      %{"B2" => %{text: "Typed in by hand", author: "Ada", width: nil, height: nil}}
+
+      iex> Elixlsx.Sheet.set_note(%Elixlsx.Sheet{}, "B", "text")
+      ** (ArgumentError) a note needs a single cell in A1 notation such as "B2", got: "B"
+
+  """
+  def set_note(sheet, cell, text, opts \\ []) when is_binary(cell) and is_binary(text) do
+    %{sheet | notes: Map.put(sheet.notes, note_cell!(cell), new_note(text, opts))}
+  end
+
+  @spec remove_note(Sheet.t(), String.t()) :: Sheet.t()
+  @doc "Removes the note on a cell, if there is one."
+  def remove_note(sheet, cell) when is_binary(cell) do
+    %{sheet | notes: Map.delete(sheet.notes, note_cell!(cell))}
+  end
+
+  defp note_cell!(cell) do
+    case Regex.run(@a1_cell, cell) do
+      [_, col, row] ->
+        col <> row
+
+      nil ->
+        raise ArgumentError,
+              "a note needs a single cell in A1 notation such as \"B2\", got: #{inspect(cell)}"
+    end
+  end
+
+  defp new_note(text, opts) do
+    case Keyword.keys(opts) -- [:author, :width, :height] do
+      [] ->
+        %{
+          text: text,
+          author: Keyword.get(opts, :author, ""),
+          width: Keyword.get(opts, :width),
+          height: Keyword.get(opts, :height)
+        }
+
+      unknown ->
+        raise ArgumentError,
+              "unknown note option(s) #{inspect(unknown)}; known options: [:author, :width, :height]"
     end
   end
 

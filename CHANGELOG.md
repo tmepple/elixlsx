@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- Cell notes: `Sheet.set_note/4`, `Sheet.remove_note/2`. A note is the yellow box shown when
+  the pointer rests on a cell (Excel 365's "Note"; threaded "Comments" are not written). The
+  box's height is estimated from the text unless given. Sheets with notes get a comments part,
+  a VML drawing and a relationships part.
+
+### Changed
+
+- The workbook window opens twice as wide and twice as tall as in 0.7.0 (about 1610 x 966 points).
+
+### Internal
+
+- `Elixlsx.XlsxCheck.check_package!/1`: every relationship resolves to a part and every part
+  has a content type.
+- One CI workflow on current Elixir replaces the two for Elixir 1.12 and 1.15.
+
 ## 0.7.0
 
 First release of the [tmepple/elixlsx](https://github.com/tmepple/elixlsx) fork. Not published

@@ -137,18 +137,45 @@ defmodule Elixlsx.XMLTemplates do
     Enum.map_join(sheet_comp_infos, &contenttypes_sheet_entry/1)
   end
 
-  def make_contenttypes_xml(wci) do
+  # Notes bring per-sheet .rels files and .vml drawings, typed by extension.
+  defp contenttypes_notes_defaults(sheets) do
+    if Enum.any?(sheets, &Elixlsx.Notes.any?/1) do
+      """
+      <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+      <Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>
+      """
+    else
+      ""
+    end
+  end
+
+  defp contenttypes_notes_entries(sheets, sheet_comp_infos) do
+    sheets
+    |> Enum.zip(sheet_comp_infos)
+    |> Enum.filter(fn {sheet, _sci} -> Elixlsx.Notes.any?(sheet) end)
+    |> Enum.map_join(fn {_sheet, sci} ->
+      """
+      <Override PartName="/xl/comments#{sci.sheetId}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>
+      """
+    end)
+  end
+
+  def make_contenttypes_xml(wci, sheets \\ []) do
     ~S"""
     <?xml version="1.0" encoding="UTF-8"?>
     <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-    <Override PartName="/_rels/.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-    <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
-    <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-    <Override PartName="/xl/_rels/workbook.xml.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-    <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
     """ <>
+      contenttypes_notes_defaults(sheets) <>
+      ~S"""
+      <Override PartName="/_rels/.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+      <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+      <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+      <Override PartName="/xl/_rels/workbook.xml.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+      <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+      <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+      """ <>
       contenttypes_sheet_entries(wci.sheet_info) <>
+      contenttypes_notes_entries(sheets, wci.sheet_info) <>
       ~S"""
       <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
       </Types>
@@ -500,6 +527,7 @@ defmodule Elixlsx.XMLTemplates do
       make_data_validations(sheet.data_validations),
       ~S(<pageMargins left="0.75" right="0.75" top="1" bottom="1.0" header="0.5" footer="0.5"/>),
       make_page_setup(sheet),
+      make_legacy_drawing(sheet),
       "</worksheet>"
     ]
     |> Enum.reject(&(&1 == ""))
@@ -533,6 +561,13 @@ defmodule Elixlsx.XMLTemplates do
       nil -> ""
       ref -> "<autoFilter ref=\"#{ref}\"/>"
     end
+  end
+
+  # Points at the VML drawing that holds the note boxes (see Elixlsx.Notes).
+  defp make_legacy_drawing(sheet) do
+    if Elixlsx.Notes.any?(sheet),
+      do: "<legacyDrawing r:id=\"#{Elixlsx.Notes.vml_rid()}\"/>",
+      else: ""
   end
 
   defp make_page_setup(%Sheet{page_setup: []}), do: ""
@@ -870,7 +905,7 @@ defmodule Elixlsx.XMLTemplates do
     <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
     <fileVersion appName="Calc"/>
     <bookViews>
-      <workbookView xWindow="240" yWindow="15" windowWidth="16095" windowHeight="9660" activeTab="0"/>
+      <workbookView xWindow="240" yWindow="15" windowWidth="32190" windowHeight="19320" activeTab="0"/>
     </bookViews>
     <sheets>
     """ <>

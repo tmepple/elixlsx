@@ -4,6 +4,7 @@ defmodule Elixlsx.FeaturesTest do
   alias Elixlsx.{Sheet, Workbook, XlsxCheck}
 
   doctest Elixlsx.Cell
+  doctest Elixlsx.Notes
 
   @sheet1 "xl/worksheets/sheet1.xml"
 
@@ -54,8 +55,15 @@ defmodule Elixlsx.FeaturesTest do
       |> Sheet.set_pane_freeze(1, 0)
       |> Sheet.add_data_validations("A2", "A3", ["Alpha", "Beta"])
       |> Sheet.autofit_col_widths(padding: 2)
+      |> Sheet.set_note("B1", "Net of returns & allowances.\nSecond line < third.",
+        author: "Ada & Co"
+      )
+      |> Sheet.set_note("A2", "Largest account")
 
-    plain = %Sheet{name: "Plain", rows: [["x", 1], ["y", 2]]} |> Sheet.set_auto_filter()
+    plain =
+      %Sheet{name: "Plain", rows: [["x", 1], ["y", 2]]}
+      |> Sheet.set_auto_filter()
+      |> Sheet.set_note("B2", "A note on the second sheet", width: 120, height: 50)
 
     book([data, plain, %Sheet{name: "Empty"}])
   end
@@ -117,12 +125,117 @@ defmodule Elixlsx.FeaturesTest do
 
   describe "workbook window" do
     # Without a size, Excel opens the file filling the whole screen. The values
-    # are XlsxWriter's defaults, in twentieths of a point.
+    # are in twentieths of a point: about 1610 x 966 points, twice XlsxWriter's
+    # default in each direction.
     test "has a position and size" do
       xml = XlsxCheck.part(book(%Sheet{name: "S", rows: [["a"]]}), "xl/workbook.xml")
 
       assert xml =~
-               ~s(<workbookView xWindow="240" yWindow="15" windowWidth="16095" windowHeight="9660" activeTab="0"/>)
+               ~s(<workbookView xWindow="240" yWindow="15" windowWidth="32190" windowHeight="19320" activeTab="0"/>)
+    end
+  end
+
+  describe "notes" do
+    defp noted do
+      first = %Sheet{name: "First", rows: [["a", "b"], [1, 2]]}
+
+      second =
+        %Sheet{name: "Second", rows: [["a", "b"], [1, 2]]}
+        |> Sheet.set_note("B2", "Second & last", author: "Ada")
+        |> Sheet.set_note("A1", "First <note>", author: "Bob")
+        |> Sheet.set_note("$C$5", "On an empty cell", author: "Ada", width: 120, height: 60)
+
+      book([first, second])
+    end
+
+    test "only a sheet with notes gets the extra parts, numbered after the sheet" do
+      paths = noted() |> XlsxCheck.parts() |> Map.keys()
+
+      assert "xl/comments2.xml" in paths
+      assert "xl/drawings/vmlDrawing2.vml" in paths
+      assert "xl/worksheets/_rels/sheet2.xml.rels" in paths
+      refute Enum.any?(paths, &(&1 =~ ~r/comments1|vmlDrawing1|sheet1\.xml\.rels/))
+    end
+
+    test "the comments part lists authors once and notes in row order, escaped" do
+      xml = XlsxCheck.part(noted(), "xl/comments2.xml")
+
+      assert xml =~ "<authors><author>Bob</author><author>Ada</author></authors>"
+
+      [a1, b2, c5] =
+        positions(xml, [
+          ~s(ref="A1" authorId="0"),
+          ~s(ref="B2" authorId="1"),
+          ~s(ref="C5" authorId="1")
+        ])
+
+      assert a1 < b2 and b2 < c5
+      assert xml =~ "<t>First &lt;note></t>"
+      assert xml =~ "<t>Second &amp; last</t>"
+      assert_well_formed(xml)
+    end
+
+    test "the drawing has one shape per note, at the note's cell, with unique ids" do
+      xml = XlsxCheck.part(noted(), "xl/drawings/vmlDrawing2.vml")
+
+      assert xml =~ ~s(<o:idmap v:ext="edit" data="2"/>)
+
+      assert Regex.scan(~r/<v:shape id="(_x0000_s\d+)"/, xml) |> Enum.map(&List.last/1) == [
+               "_x0000_s2049",
+               "_x0000_s2050",
+               "_x0000_s2051"
+             ]
+
+      assert xml =~ "<x:Row>0</x:Row><x:Column>0</x:Column>"
+      assert xml =~ "<x:Row>1</x:Row><x:Column>1</x:Column>"
+      assert xml =~ "<x:Row>4</x:Row><x:Column>2</x:Column>"
+      assert xml =~ "width:120pt;height:60pt"
+      assert_well_formed(xml)
+    end
+
+    test "the sheet points at the drawing, last among its children" do
+      xml = XlsxCheck.part(noted(), "xl/worksheets/sheet2.xml")
+
+      [margins, drawing, close] =
+        positions(xml, ["<pageMargins", ~s(<legacyDrawing r:id="rId1"/>), "</worksheet>"])
+
+      assert margins < drawing and drawing < close
+      refute XlsxCheck.part(noted(), "xl/worksheets/sheet1.xml") =~ "legacyDrawing"
+    end
+
+    test "content types cover the new parts, and a workbook without notes is unchanged" do
+      types = XlsxCheck.part(noted(), "[Content_Types].xml")
+
+      assert types =~
+               ~s(<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>)
+
+      assert types =~ ~s(<Override PartName="/xl/comments2.xml")
+      assert_well_formed(types)
+
+      plain = XlsxCheck.part(book(%Sheet{name: "S", rows: [["a"]]}), "[Content_Types].xml")
+      refute plain =~ "Default"
+      refute plain =~ "comments"
+    end
+
+    test "every relationship resolves and every part is typed" do
+      assert :ok = XlsxCheck.check_package!(noted())
+      assert :ok = XlsxCheck.check_package!(book(%Sheet{name: "S", rows: [["a"]]}))
+    end
+
+    test "setting a note again replaces it, and it can be removed" do
+      sheet = %Sheet{name: "S"} |> Sheet.set_note("A1", "one") |> Sheet.set_note("A1", "two")
+      assert sheet.notes["A1"].text == "two"
+      assert Sheet.remove_note(sheet, "A1").notes == %{}
+    end
+
+    test "unknown options and ranges are refused" do
+      assert_raise ArgumentError, ~r/unknown note option\(s\) \[:colour\]/, fn ->
+        Sheet.set_note(%Sheet{}, "A1", "x", colour: "red")
+      end
+
+      assert_raise ArgumentError, ~r/a note needs a single cell/, fn ->
+        Sheet.set_note(%Sheet{}, "A1:B2", "x")
+      end
     end
   end
 
@@ -310,6 +423,10 @@ defmodule Elixlsx.FeaturesTest do
       assert :ok = XlsxCheck.validate_schema!(kitchen_sink())
     end
 
+    test "is a consistent package" do
+      assert :ok = XlsxCheck.check_package!(kitchen_sink())
+    end
+
     @tag :schema
     test "a plain workbook with none of the new features still validates" do
       plain =
@@ -364,7 +481,13 @@ defmodule Elixlsx.FeaturesTest do
       assert Enum.at(sheet["cells"], 3) == ["Total", "=SUM(B2:B3)", "=MAX(C2:C3)", ~s(=A2&"<"&A3)]
       assert sheet["number_formats"] |> Enum.at(1) |> Enum.at(2) == "yyyy-mm-dd"
 
+      assert sheet["notes"] == %{
+               "A2" => "Largest account",
+               "B1" => "Net of returns & allowances.\nSecond line < third."
+             }
+
       assert read["sheets"]["Plain"]["auto_filter"] == "A1:B2"
+      assert read["sheets"]["Plain"]["notes"] == %{"B2" => "A note on the second sheet"}
       assert read["sheets"]["Empty"]["auto_filter"] in [nil, ""]
 
       # openpyxl consumes the hidden _xlnm._FilterDatabase names while loading, so

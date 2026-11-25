@@ -21,7 +21,7 @@ defmodule Elixlsx.XlsxCheck do
 
   alias Elixlsx.{Compiler, Workbook, Writer}
 
-  @validated ~r{^xl/(workbook\.xml|styles\.xml|worksheets/sheet\d+\.xml)$}
+  @validated ~r{^xl/(workbook\.xml|styles\.xml|worksheets/sheet\d+\.xml|comments\d+\.xml)$}
 
   @doc "The package as `%{path => xml}`."
   @spec parts(Workbook.t()) :: %{String.t() => String.t()}
@@ -36,6 +36,61 @@ defmodule Elixlsx.XlsxCheck do
   @doc "One file of the package, e.g. `part(workbook, \"xl/worksheets/sheet1.xml\")`."
   @spec part(Workbook.t(), String.t()) :: String.t()
   def part(%Workbook{} = workbook, path), do: Map.fetch!(parts(workbook), path)
+
+  @doc """
+  Checks that the package hangs together: every relationship points at a part
+  that exists, and every part has a content type, by its own `Override` or by a
+  `Default` for its extension. Excel refuses a file that fails either. Returns
+  `:ok` or raises listing the problems.
+  """
+  @spec check_package!(Workbook.t()) :: :ok
+  def check_package!(%Workbook{} = workbook) do
+    parts = parts(workbook)
+    types = Map.fetch!(parts, "[Content_Types].xml")
+
+    overrides =
+      ~r/<Override PartName="\/([^"]+)"/ |> Regex.scan(types) |> MapSet.new(fn [_, p] -> p end)
+
+    defaults =
+      ~r/<Default Extension="([^"]+)"/ |> Regex.scan(types) |> MapSet.new(fn [_, e] -> e end)
+
+    untyped =
+      for {path, _} <- parts,
+          path != "[Content_Types].xml",
+          not MapSet.member?(overrides, path),
+          not MapSet.member?(defaults, path |> Path.extname() |> String.trim_leading(".")),
+          do: "no content type for #{path}"
+
+    dangling =
+      for {rels_path, xml} <- parts,
+          String.ends_with?(rels_path, ".rels"),
+          [_, target] <- Regex.scan(~r/Target="([^"]+)"/, xml),
+          resolved = resolve_target(rels_path, target),
+          not Map.has_key?(parts, resolved),
+          do: "#{rels_path} points at #{resolved}, which is not in the package"
+
+    case untyped ++ dangling do
+      [] -> :ok
+      problems -> raise "package check failed\n" <> Enum.join(problems, "\n")
+    end
+  end
+
+  # A relationship target is relative to the folder of the part the .rels file
+  # belongs to: xl/worksheets/_rels/sheet1.xml.rels -> xl/worksheets/.
+  defp resolve_target(rels_path, target) do
+    base = rels_path |> Path.dirname() |> Path.dirname()
+    base = if base == ".", do: "", else: base
+
+    [base, target]
+    |> Path.join()
+    |> Path.split()
+    |> Enum.reduce([], fn
+      "..", [_ | rest] -> rest
+      segment, acc -> [segment | acc]
+    end)
+    |> Enum.reverse()
+    |> Path.join()
+  end
 
   @doc "Directory holding `sml.xsd`, or `nil`."
   @spec schema_dir() :: String.t() | nil

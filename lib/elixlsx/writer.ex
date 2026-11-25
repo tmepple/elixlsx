@@ -112,8 +112,29 @@ defmodule Elixlsx.Writer do
     end)
   end
 
-  def get_contentTypes_xml(_, wci) do
-    {~c"[Content_Types].xml", XMLTemplates.make_contenttypes_xml(wci)}
+  def get_contentTypes_xml(workbook, wci) do
+    {~c"[Content_Types].xml", XMLTemplates.make_contenttypes_xml(wci, workbook.sheets)}
+  end
+
+  @spec get_xl_notes_files(Workbook.t(), WorkbookCompInfo.t()) :: list(zip_tuple)
+  @doc ~S"""
+  Returns the extra parts for sheets that have notes: the comments, the VML
+  drawing and the sheet's relationships. See `Elixlsx.Notes`.
+  """
+  def get_xl_notes_files(data, wci) do
+    data.sheets
+    |> Enum.zip(wci.sheet_info)
+    |> Enum.filter(fn {sheet, _sci} -> Elixlsx.Notes.any?(sheet) end)
+    |> Enum.flat_map(fn {sheet, sci} ->
+      n = sci.sheetId
+
+      [
+        {String.to_charlist("xl/comments#{n}.xml"), Elixlsx.Notes.comments_xml(sheet)},
+        {String.to_charlist("xl/drawings/vmlDrawing#{n}.vml"), Elixlsx.Notes.vml_xml(sheet, n)},
+        {String.to_charlist("xl/worksheets/_rels/#{sci.filename}.rels"),
+         Elixlsx.Notes.rels_xml(n)}
+      ]
+    end)
   end
 
   def get_xl_dir(data, wci) do
@@ -126,6 +147,7 @@ defmodule Elixlsx.Writer do
       get_xl_workbook_xml(data, sheet_comp_infos)
     ] ++
       get_xl_rels_dir(data, sheet_comp_infos, next_free_xl_rid) ++
-      get_xl_worksheets_dir(data, wci)
+      get_xl_worksheets_dir(data, wci) ++
+      get_xl_notes_files(data, wci)
   end
 end
