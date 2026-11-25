@@ -159,17 +159,16 @@ defmodule Elixlsx.XMLTemplates do
   ### xl/worksheet/sheet*.xml
   ###
 
-  defp split_into_content_style([h | t], wci) do
-    cellstyle = CellStyle.from_props(t)
+  defp split_into_content_style(cell, wci) do
+    case Elixlsx.Cell.normalize(cell) do
+      {content, []} when not is_list(cell) ->
+        {content, 0, nil}
 
-    {
-      h,
-      CellStyleDB.get_id(wci.cellstyledb, cellstyle),
-      cellstyle
-    }
+      {content, props} ->
+        cellstyle = CellStyle.from_props(props)
+        {content, CellStyleDB.get_id(wci.cellstyledb, cellstyle), cellstyle}
+    end
   end
-
-  defp split_into_content_style(cell, _wci), do: {cell, 0, nil}
 
   defp get_content_type_value(content, wci) do
     case content do
@@ -222,7 +221,15 @@ defmodule Elixlsx.XMLTemplates do
         else
           content =
             if CellStyle.is_date?(cellstyle) do
-              U.to_excel_datetime(content)
+              try do
+                U.to_excel_datetime(content)
+              rescue
+                e in ArgumentError ->
+                  reraise %ArgumentError{
+                            message: "Cell #{U.to_excel_coords(rowidx, colidx)}: " <> e.message
+                          },
+                          __STACKTRACE__
+              end
             else
               content
             end
@@ -256,7 +263,7 @@ defmodule Elixlsx.XMLTemplates do
                 """
                 <c r="#{U.to_excel_coords(rowidx, colidx)}"
                 s="#{styleID}">
-                <f>#{content_value}</f>
+                <f>#{minimal_xml_text_escape(content_value)}</f>
                 #{value}
                 </c>
                 """
@@ -333,7 +340,8 @@ defmodule Elixlsx.XMLTemplates do
 
   defp xl_sheet_rows(data, row_heights, grouping_info, wci) do
     rows =
-      Enum.zip(data, 1..length(data))
+      data
+      |> Enum.with_index(1)
       |> Enum.map_join(fn {row, rowidx} ->
         """
         <row r="#{rowidx}" #{get_row_height_attr(row_heights, rowidx)}#{get_row_grouping_attr(grouping_info, rowidx)}>
@@ -460,48 +468,91 @@ defmodule Elixlsx.XMLTemplates do
   @spec make_sheet(Sheet.t(), WorkbookCompInfo.t()) :: String.t()
   @doc ~S"""
   Returns the XML content for single sheet.
+
+  The children of `<worksheet>` must appear in the order the schema lists them
+  (CT_Worksheet): sheetPr, dimension, sheetViews, sheetFormatPr, cols,
+  sheetData, sheetProtection, autoFilter, mergeCells, conditionalFormatting,
+  dataValidations, hyperlinks, printOptions, pageMargins, pageSetup,
+  headerFooter, drawing, legacyDrawing, tableParts. Excel offers to repair a
+  file that breaks the order, or drops the misplaced element without a word.
+  The list below is in that order; add new sections at their place in it.
   """
   def make_sheet(sheet, wci) do
     grouping_info = get_grouping_info(sheet.group_rows)
 
-    ~S"""
-    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-    <sheetPr filterMode="false">
-      <pageSetUpPr fitToPage="false"/>
-    </sheetPr>
-    <dimension ref="A1"/>
-    <sheetViews>
-    <sheetView workbookViewId="0"
-    """ <>
-      make_sheet_show_grid(sheet) <>
-      """
-      >
-      """ <>
-      make_sheetview(sheet) <>
-      """
-      </sheetView>
-      </sheetViews>
-      <sheetFormatPr defaultRowHeight="12.8"
-      """ <>
-      make_max_outline_level_row(grouping_info.outline_lvs) <>
-      """
-      />
-      """ <>
-      make_cols(sheet) <>
-      """
-      <sheetData>
-      """ <>
-      xl_sheet_rows(sheet.rows, sheet.row_heights, grouping_info, wci) <>
-      ~S"""
-      </sheetData>
-      """ <>
-      xl_merge_cells(sheet.merge_cells) <>
-      make_data_validations(sheet.data_validations) <>
-      """
-      <pageMargins left="0.75" right="0.75" top="1" bottom="1.0" header="0.5" footer="0.5"/>
-      </worksheet>
-      """
+    [
+      ~S(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>),
+      ~S(<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">),
+      make_sheet_pr(sheet),
+      make_dimension(sheet),
+      "<sheetViews>",
+      "<sheetView workbookViewId=\"0\" #{make_sheet_show_grid(sheet)}>",
+      make_sheetview(sheet),
+      "</sheetView>",
+      "</sheetViews>",
+      "<sheetFormatPr defaultRowHeight=\"12.8\"#{make_max_outline_level_row(grouping_info.outline_lvs)}/>",
+      make_cols(sheet),
+      "<sheetData>",
+      xl_sheet_rows(sheet.rows, sheet.row_heights, grouping_info, wci),
+      "</sheetData>",
+      make_auto_filter(sheet),
+      xl_merge_cells(sheet.merge_cells),
+      make_data_validations(sheet.data_validations),
+      ~S(<pageMargins left="0.75" right="0.75" top="1" bottom="1.0" header="0.5" footer="0.5"/>),
+      make_page_setup(sheet),
+      "</worksheet>"
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+    |> Kernel.<>("\n")
+  end
+
+  defp fit_to_page?(sheet) do
+    Keyword.has_key?(sheet.page_setup, :fit_to_width) or
+      Keyword.has_key?(sheet.page_setup, :fit_to_height)
+  end
+
+  defp make_sheet_pr(sheet) do
+    "<sheetPr filterMode=\"false\"><pageSetUpPr fitToPage=\"#{fit_to_page?(sheet)}\"/></sheetPr>"
+  end
+
+  # The used range, so readers know the sheet's extent without scanning it.
+  defp make_dimension(sheet) do
+    ref =
+      case Sheet.used_range(sheet) do
+        nil -> "A1"
+        "A1:A1" -> "A1"
+        range -> range
+      end
+
+    "<dimension ref=\"#{ref}\"/>"
+  end
+
+  defp make_auto_filter(sheet) do
+    case Sheet.auto_filter_ref(sheet) do
+      nil -> ""
+      ref -> "<autoFilter ref=\"#{ref}\"/>"
+    end
+  end
+
+  defp make_page_setup(%Sheet{page_setup: []}), do: ""
+
+  defp make_page_setup(sheet) do
+    orientation =
+      case sheet.page_setup[:orientation] do
+        nil -> ""
+        value -> " orientation=\"#{value}\""
+      end
+
+    fit =
+      if fit_to_page?(sheet) do
+        " fitToWidth=\"#{Keyword.get(sheet.page_setup, :fit_to_width, 0)}\"" <>
+          " fitToHeight=\"#{Keyword.get(sheet.page_setup, :fit_to_height, 0)}\""
+      else
+        ""
+      end
+
+    "<pageSetup#{orientation}#{fit}/>"
   end
 
   defp make_sheet_show_grid(sheet) do
@@ -775,6 +826,41 @@ defmodule Elixlsx.XMLTemplates do
     |> Enum.map_join(&make_xl_workbook_xml_sheet_entry/1)
   end
 
+  # Excel keeps a hidden defined name per filtered sheet next to the sheet's own
+  # <autoFilter>. Files without it open, but sort and re-apply misbehave in some
+  # readers, and openpyxl and XlsxWriter both write it.
+  defp make_defined_names(sheets) do
+    names =
+      sheets
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {sheet, idx} ->
+        case Sheet.auto_filter_ref(sheet) do
+          nil ->
+            []
+
+          ref ->
+            target =
+              minimal_xml_text_escape(quote_sheet_name(sheet.name)) <> "!" <> absolute_ref(ref)
+
+            [
+              "<definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"#{idx}\" hidden=\"1\">#{target}</definedName>"
+            ]
+        end
+      end)
+
+    case names do
+      [] -> ""
+      _ -> "<definedNames>\n" <> Enum.join(names, "\n") <> "\n</definedNames>\n"
+    end
+  end
+
+  # A sheet name inside a reference is wrapped in single quotes, with any single
+  # quote in the name doubled.
+  defp quote_sheet_name(name), do: "'" <> String.replace(name, "'", "''") <> "'"
+
+  # "A1:D10" -> "$A$1:$D$10"
+  defp absolute_ref(ref), do: Regex.replace(~r/([A-Z]+)(\d+)/, ref, "$\\1$\\2")
+
   @doc ~S"""
   Return the data for /xl/workbook.xml
   """
@@ -784,13 +870,14 @@ defmodule Elixlsx.XMLTemplates do
     <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
     <fileVersion appName="Calc"/>
     <bookViews>
-      <workbookView activeTab="0"/>
+      <workbookView xWindow="240" yWindow="15" windowWidth="16095" windowHeight="9660" activeTab="0"/>
     </bookViews>
     <sheets>
     """ <>
       workbook_sheet_entries(data.sheets, sci) <>
+      "</sheets>\n" <>
+      make_defined_names(data.sheets) <>
       ~S"""
-      </sheets>
       <calcPr fullCalcOnLoad="1" iterateCount="100" refMode="A1" iterate="false" iterateDelta="0.001"/>
       </workbook>
       """

@@ -1,6 +1,46 @@
 # Changelog
 
-## 0.6.0 [WIP]
+## 0.7.0
+
+First release of the [tmepple/elixlsx](https://github.com/tmepple/elixlsx) fork. Not published
+to Hex; install from the `v0.7.0` git tag.
+
+### Breaking
+
+- Formula text is escaped by the writer (`&` and `<`). Callers that XML-escaped formulas
+  themselves must stop, or the formula is escaped twice.
+- A bare number in a date-formatted cell raises `ArgumentError`. It used to be read as a Unix
+  timestamp, so a valid Excel serial such as `45474` silently became 1970-01-01. Use
+  `{:excelts, serial}` or `{:unix, seconds}`, or pass a date struct.
+
+### Added
+
+- Auto filter: `Sheet.set_auto_filter/1,2`, `Sheet.remove_auto_filter/1`. Covers an explicit
+  A1 range or the sheet's used range, and writes the hidden `_xlnm._FilterDatabase` defined
+  name alongside.
+- Page setup: `Sheet.set_page_setup/2` with `:orientation`, `:fit_to_width`, `:fit_to_height`.
+- `Date`, `NaiveDateTime` and `DateTime` structs as cell content, with a default number format
+  when the cell has none.
+- `Sheet.autofit_col_widths/2`: column widths estimated from the widest cell.
+- `Sheet.used_range/1`; `<dimension>` now carries the used range instead of a fixed `A1`.
+- The workbook view carries a window position and size, so Excel opens the file in a normal
+  window instead of filling the screen.
+
+### Fixed
+
+- A formula with options (`{:formula, f, value: v}`) in a date-formatted cell raised
+  `FunctionClauseError`.
+- `:empty` or text in a date-formatted cell raised `FunctionClauseError`.
+- A sheet with no rows logged a range warning on current Elixir.
+
+### Internal
+
+- The children of `<worksheet>` are assembled from a list kept in schema order.
+- Test harness (`Elixlsx.XlsxCheck`): schema validation with `xmllint`, read-back with
+  openpyxl, recalculation with LibreOffice.
+- Dev dependencies updated so the project builds on current Elixir.
+
+## 0.6.0
 
 ! Minimum elixir version raised to ~~1.7 (#116)~~ 1.12 (#140)
 - Add cell validations (#109)

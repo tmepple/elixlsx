@@ -9,6 +9,10 @@
 
 Elixlsx is a writer for the MS Excel OpenXML format (`.xlsx`).
 
+> **This is a maintained fork** of [xou/elixlsx](https://github.com/xou/elixlsx), which has
+> had no release since 0.6.0 (March 2024). It is not published to Hex; depend on it by git
+> tag (see Installation). Changes since 0.6.0 are in the [changelog](CHANGELOG.md).
+
 Features:
 
 - Multiple (named) sheets with custom column widths & column heights.
@@ -17,25 +21,17 @@ Features:
 - Horizontal alignment and text wrapping
 - Font and cell background color, borders
 - Merged cells
+- Auto filters, page setup (orientation, fit to page)
+- Formulas, with an optional cached value
 
 
 ## Installation
 
-As of version 0.6, elixlsx requires Elixir 1.12 or above.
-
-Installation via Hex, in `mix.exs`:
+Elixlsx requires Elixir 1.12 or above. This fork is installed from GitHub, pinned to a tag:
 
 ```elixir
 defp deps do
-  [{:elixlsx, "~> 0.6.0"}]
-end
-```
-
-Via GitHub:
-
-```elixir
-defp deps do
-  [{:elixlsx, github: "xou/elixlsx"}]
+  [{:elixlsx, github: "tmepple/elixlsx", tag: "v0.7.0"}]
 end
 ```
 
@@ -48,10 +44,27 @@ end
 iex(1)> Workbook.append_sheet(%Workbook{}, Sheet.with_name("Sheet 1") |> Sheet.set_cell("A1", "Hello", bold: true)) |> Elixlsx.write_to("hello.xlsx")
 ```
 
-See [example.exs](https://github.com/xou/elixlsx/blob/master/example.exs) for examples how to use the various features.
+See [example.exs](example.exs) for examples how to use the various features.
 
-- The workbook is a XML file ultimately, so remember that formulas containing "<" or ">" must be escaped properly.
-- `:xmerl_lib.export_text/1` can be used to escape formulas properly
+- Formula text is escaped by the writer. Write formulas as you would type them in Excel
+  (`A1&"<"&B1`); do not XML-escape them yourself, or they will be escaped twice.
+- Dates are passed as `Date`, `NaiveDateTime` or `DateTime` structs, or Erlang `:calendar`
+  tuples. A bare number in a date-formatted cell raises; use `{:excelts, serial}` or
+  `{:unix, seconds}` to say which kind of number it is.
+
+## Development
+
+`mix test` runs everything it has the tools for and says which tests it left out:
+
+- `:schema` tests validate the generated XML against the SpreadsheetML schema with `xmllint`.
+  They catch elements written in the wrong order, which Excel answers with a repair prompt.
+  Fetch the schemas once with `scripts/fetch_schemas.sh` (they are not part of this repository).
+- `:interop` tests have openpyxl read the file back and LibreOffice recalculate it. They need
+  `uv` and `soffice` on the path.
+
+When adding a feature, generate a reference file with openpyxl or XlsxWriter and copy the XML
+they emit, add the element at its place in `Elixlsx.XMLTemplates.make_sheet/2` (the list there
+is in schema order), and open one generated file in Excel itself before tagging.
 
 ## Number and date formatting reference
 
@@ -63,4 +76,4 @@ A quick introduction how number formattings look like can be found
 
 Copyright (c) 2015 Nikolai Weh
 
-This library is MIT licensed. See the [LICENSE](https://github.com/xou/elixlsx/blob/master/LICENSE) for details.
+This library is MIT licensed. See the [LICENSE](LICENSE) for details.

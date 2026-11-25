@@ -13,14 +13,18 @@ sheet1 = Sheet.with_name("First")
   |> Sheet.set_cell("B4", "Background color \\o/", bg_color: "#ffff00")
   # Number formatting can be applied like this:
   |> Sheet.set_cell("A1", 123.4, num_format: "0.00")
-  # Two date formats are accepted, erlang's :calendar format and UNIX timestamps.
-  # the datetime: true parameter automatically applies conversion to Excels internal format.
-  |> Sheet.set_cell("A2", {{2015, 11, 30}, {21, 20, 38}}, datetime: true)
-  |> Sheet.set_cell("A3", 1_448_882_362, datetime: true)
-  # datetime: true outputs date and time, yyyymmdd limits the output to just the date
-  |> Sheet.set_cell("A4", 1_448_882_362, yyyymmdd: true)
-  # datetime: true ouputs date and time, yyyymmdd limits the output to just the date
-  |> Sheet.set_cell("A5", 1_448_882_362, yyyymm: true)
+  # Dates: Date, NaiveDateTime and DateTime structs are converted to Excel's
+  # internal format and get a default number format (yyyy-mm-dd, or
+  # yyyy-mm-dd h:mm:ss when there is a time).
+  |> Sheet.set_cell("A2", ~N[2015-11-30 21:20:38])
+  |> Sheet.set_cell("A3", ~D[2015-11-30])
+  # datetime: true outputs date and time, yyyymmdd limits the output to just the
+  # date, yyyymm to year and month. Erlang's :calendar tuples work as well.
+  |> Sheet.set_cell("A4", {{2015, 11, 30}, {21, 20, 38}}, yyyymmdd: true)
+  # A bare number in a date-formatted cell is refused, because it could be an
+  # Excel serial or a Unix timestamp. Say which one it is:
+  |> Sheet.set_cell("A5", {:unix, 1_448_882_362}, yyyymm: true)
+  |> Sheet.set_cell("A8", {:excelts, 42338.889329}, datetime: true)
   # make some room in the first column, otherwise the date will only show up as ###
   |> Sheet.set_col_width("A", 18.0)
   # Cell borders
@@ -51,6 +55,12 @@ sheet1 = Sheet.with_name("First")
   |> Sheet.add_data_validations("A1", "A10", "=$A$2:$A$16")
   # reference to other sheet  "=#{sheet.name}!$A$2:$A$16"
   |> Sheet.add_data_validations("A1", "A10", "=sheet2!$A$2:$A$16")
+
+  # Filter dropdowns on the header row. With no range, the filter covers the
+  # sheet's used range; pass "A1:F10" to choose one.
+  |> Sheet.set_auto_filter("A1:F8")
+  # Print landscape, every column on one page width.
+  |> Sheet.set_page_setup(orientation: :landscape, fit_to_width: 1)
 
 workbook = %Workbook{sheets: [sheet1]}
 
@@ -136,7 +146,7 @@ sheet5 =
 sheet6 =
   %Sheet{
     name: "Row and Column Groups",
-    rows: 1..100 |> Enum.chunk(10),
+    rows: 1..100 |> Enum.chunk_every(10),
     # collapse and hide rows 2 to 3
     group_rows: [{2..3, collapsed: true}, 6..7],
     # nest

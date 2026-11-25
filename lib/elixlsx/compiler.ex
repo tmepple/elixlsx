@@ -47,15 +47,15 @@ defmodule Elixlsx.Compiler do
 
   @spec compinfo_cell_pass(WorkbookCompInfo.t(), any) :: WorkbookCompInfo.t()
   def compinfo_cell_pass(wci, cell) do
-    cond do
-      is_list(cell) ->
-        wci
-        |> compinfo_cell_pass_value(hd(cell))
-        |> compinfo_cell_pass_style(tl(cell))
-
-      true ->
+    case Elixlsx.Cell.normalize(cell) do
+      {content, []} when not is_list(cell) ->
         # no style information attached in this cell
-        compinfo_cell_pass_value(wci, cell)
+        compinfo_cell_pass_value(wci, content)
+
+      {content, props} ->
+        wci
+        |> compinfo_cell_pass_value(content)
+        |> compinfo_cell_pass_style(props)
     end
   end
 

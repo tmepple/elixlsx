@@ -31,3 +31,6 @@ elixlsx-*.tar
 
 # Misc.
 *.swp
+
+# SpreadsheetML schemas fetched by scripts/fetch_schemas.sh for the :schema tests.
+/test/schemas/

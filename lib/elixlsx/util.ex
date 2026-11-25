@@ -189,12 +189,32 @@ defmodule Elixlsx.Util do
   @secs_per_day 86400
 
   @doc ~S"""
-  Convert an erlang `:calendar` object, or a unix timestamp to an excel timestamp.
+  Converts the content of a date-formatted cell to an Excel timestamp.
 
-  Timestampts that are already in excel format are passed through
-  unmodified.
+  Accepted: an Erlang `:calendar` datetime tuple, `{:unix, seconds}`, and
+  `{:excelts, serial}` (passed through). Formulas, text and `:empty` are passed
+  through untouched. `Date`, `NaiveDateTime` and `DateTime` structs are
+  converted earlier, by `Elixlsx.Cell.normalize/1`.
+
+  A bare number raises: it could be a serial or a Unix timestamp, and guessing
+  wrong silently produces a date decades off.
+
+      iex> to_excel_datetime({{2024, 7, 1}, {0, 0, 0}})
+      {:excelts, 45474.0}
+
+      iex> to_excel_datetime({:unix, 1_719_792_000})
+      {:excelts, 45474.0}
+
+      iex> to_excel_datetime({:excelts, 45474})
+      {:excelts, 45474}
+
+      iex> to_excel_datetime({:formula, "DATEVALUE(B7)", value: 45474})
+      {:formula, "DATEVALUE(B7)", [value: 45474]}
+
+      iex> to_excel_datetime(45474)
+      ** (ArgumentError) a bare number (45474) in a date-formatted cell is ambiguous. Pass a %Date{}, %NaiveDateTime{} or %DateTime{}, an Erlang datetime tuple, {:excelts, serial} for an Excel serial, or {:unix, seconds} for a Unix timestamp
   """
-  @spec to_excel_datetime(datetime_t) :: {:excelts, number}
+  @spec to_excel_datetime(any) :: any
   def to_excel_datetime({{yy, mm, dd}, {h, m, s}}) do
     in_seconds = :calendar.datetime_to_gregorian_seconds({{yy, mm, dd}, {h, m, s}})
     excel_epoch = :calendar.datetime_to_gregorian_seconds(@excel_epoch)
@@ -212,24 +232,40 @@ defmodule Elixlsx.Util do
     {:excelts, t_diff}
   end
 
-  @spec to_excel_datetime(number) :: {:excelts, number}
-  def to_excel_datetime(input) when is_number(input) do
+  # A Unix timestamp in seconds, stated explicitly.
+  def to_excel_datetime({:unix, seconds}) when is_integer(seconds) do
     to_excel_datetime(
-      :calendar.now_to_universal_time({div(input, 1_000_000), rem(input, 1_000_000), 0})
+      :calendar.now_to_universal_time({div(seconds, 1_000_000), rem(seconds, 1_000_000), 0})
     )
   end
 
-  @spec to_excel_datetime({:excelts, number}) :: {:excelts, number}
+  # A bare number is ambiguous: it could be an Excel serial or a Unix timestamp.
+  # Up to 0.6.0 it was silently read as Unix seconds, so a valid serial such as
+  # 45474 came out as 1970-01-01. Refuse it and name the explicit forms.
+  def to_excel_datetime(input) when is_number(input) do
+    raise ArgumentError,
+          "a bare number (#{input}) in a date-formatted cell is ambiguous. Pass a %Date{}, " <>
+            "%NaiveDateTime{} or %DateTime{}, an Erlang datetime tuple, {:excelts, serial} for an " <>
+            "Excel serial, or {:unix, seconds} for a Unix timestamp"
+  end
+
   def to_excel_datetime({:excelts, value}) do
     {:excelts, value}
   end
 
-  # Formula's value calculate on opening excel program.
-  # We don't need to format this here.
-  @spec to_excel_datetime({:formula, String.t()}) :: {:formula, String.t()}
+  # A formula's value is calculated when the file is opened; nothing to convert.
+  # The three-element form carries options such as a cached `:value`.
   def to_excel_datetime({:formula, value}) do
     {:formula, value}
   end
+
+  def to_excel_datetime({:formula, value, opts}) when is_list(opts) do
+    {:formula, value, opts}
+  end
+
+  # Text and blanks may sit in a date-formatted cell (a header, a gap).
+  def to_excel_datetime(:empty), do: :empty
+  def to_excel_datetime(text) when is_binary(text), do: text
 
   @doc ~S"""
   Replace_all(input, [{search, replace}]).

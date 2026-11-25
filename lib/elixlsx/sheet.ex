@@ -29,7 +29,9 @@ defmodule Elixlsx.Sheet do
             merge_cells: [],
             pane_freeze: nil,
             show_grid_lines: true,
-            data_validations: []
+            data_validations: [],
+            auto_filter: nil,
+            page_setup: []
 
   @type t :: %Sheet{
           name: String.t(),
@@ -41,7 +43,9 @@ defmodule Elixlsx.Sheet do
           merge_cells: [{String.t(), String.t()}],
           pane_freeze: {number, number} | nil,
           show_grid_lines: boolean(),
-          data_validations: list({String.t(), String.t(), list(String.t()) | String.t()})
+          data_validations: list({String.t(), String.t(), list(String.t()) | String.t()}),
+          auto_filter: nil | true | String.t(),
+          page_setup: Keyword.t()
         }
   @type rowcol_group :: Range.t() | {Range.t(), opts :: keyword}
 
@@ -222,8 +226,200 @@ defmodule Elixlsx.Sheet do
     %{sheet | pane_freeze: nil}
   end
 
-  @spec add_data_validations(Sheet.t(), String.t(), String.t(), String.t() | list(String.t())) :: Sheet.t()
+  @spec add_data_validations(Sheet.t(), String.t(), String.t(), String.t() | list(String.t())) ::
+          Sheet.t()
   def add_data_validations(sheet, start_cell, end_cell, values) do
     %{sheet | data_validations: [{start_cell, end_cell, values} | sheet.data_validations]}
+  end
+
+  @a1_range ~r/^\$?([A-Z]{1,3})\$?([1-9]\d*):\$?([A-Z]{1,3})\$?([1-9]\d*)$/
+
+  @spec set_auto_filter(Sheet.t(), true | String.t()) :: Sheet.t()
+  @doc ~S"""
+  Puts filter dropdowns on the first row of a range.
+
+  With no range (or `true`) the filter covers the sheet's used range, worked
+  out when the file is written, so rows added afterwards are included. An
+  explicit range is given in A1 notation; `$` signs are accepted and ignored.
+
+  ## Examples
+
+      iex> sheet = %Elixlsx.Sheet{rows: [["Name", "Amount"], ["a", 1], ["b", 2]]}
+      iex> sheet |> Elixlsx.Sheet.set_auto_filter() |> Elixlsx.Sheet.auto_filter_ref()
+      "A1:B3"
+
+      iex> %Elixlsx.Sheet{} |> Elixlsx.Sheet.set_auto_filter("$A$1:$D$10") |> Elixlsx.Sheet.auto_filter_ref()
+      "A1:D10"
+
+      iex> Elixlsx.Sheet.set_auto_filter(%Elixlsx.Sheet{}, "nope")
+      ** (ArgumentError) auto filter range must be in A1 notation such as "A1:D10", got: "nope"
+
+  """
+  def set_auto_filter(sheet, range \\ true)
+  def set_auto_filter(sheet, true), do: %{sheet | auto_filter: true}
+
+  def set_auto_filter(sheet, range) when is_binary(range) do
+    case Regex.run(@a1_range, range) do
+      [_, c1, r1, c2, r2] ->
+        %{sheet | auto_filter: "#{c1}#{r1}:#{c2}#{r2}"}
+
+      nil ->
+        raise ArgumentError,
+              "auto filter range must be in A1 notation such as \"A1:D10\", got: #{inspect(range)}"
+    end
+  end
+
+  @spec remove_auto_filter(Sheet.t()) :: Sheet.t()
+  @doc "Removes the auto filter."
+  def remove_auto_filter(sheet), do: %{sheet | auto_filter: nil}
+
+  @spec auto_filter_ref(Sheet.t()) :: String.t() | nil
+  @doc ~S"""
+  The range the auto filter will cover, or `nil` when there is none (no filter
+  set, or a used-range filter on a sheet with no cells).
+  """
+  def auto_filter_ref(%Sheet{auto_filter: nil}), do: nil
+  def auto_filter_ref(%Sheet{auto_filter: true} = sheet), do: used_range(sheet)
+  def auto_filter_ref(%Sheet{auto_filter: range}) when is_binary(range), do: range
+
+  @spec used_range(Sheet.t()) :: String.t() | nil
+  @doc ~S"""
+  The A1 range from `A1` to the last row and the widest row's last column, or
+  `nil` when the sheet has no cells.
+
+  ## Examples
+
+      iex> Elixlsx.Sheet.used_range(%Elixlsx.Sheet{rows: [["a", "b", "c"], ["d"]]})
+      "A1:C2"
+
+      iex> Elixlsx.Sheet.used_range(%Elixlsx.Sheet{})
+      nil
+
+  """
+  def used_range(%Sheet{rows: rows}) do
+    case rows |> Enum.map(&length/1) |> Enum.max(fn -> 0 end) do
+      0 -> nil
+      last_col -> "A1:" <> Util.to_excel_coords(length(rows), last_col)
+    end
+  end
+
+  @page_setup_keys [:orientation, :fit_to_width, :fit_to_height]
+
+  @spec set_page_setup(Sheet.t(), Keyword.t()) :: Sheet.t()
+  @doc ~S"""
+  Sets how the sheet prints.
+
+  ## Options
+
+    - `orientation`: `:portrait` or `:landscape`.
+    - `fit_to_width`, `fit_to_height`: scale the sheet to this many pages wide
+      and tall. `0` means as many pages as needed. Giving only one of the two
+      leaves the other at `0`, so `fit_to_width: 1` prints every column on one
+      page width and lets the rows run on.
+
+  Options given here are merged over any set earlier.
+
+  ## Examples
+
+      iex> sheet = Elixlsx.Sheet.set_page_setup(%Elixlsx.Sheet{}, orientation: :landscape, fit_to_width: 1)
+      iex> sheet.page_setup
+      [orientation: :landscape, fit_to_width: 1]
+
+      iex> Elixlsx.Sheet.set_page_setup(%Elixlsx.Sheet{}, orientation: :sideways)
+      ** (ArgumentError) page setup :orientation must be :portrait or :landscape, got: :sideways
+
+  """
+  def set_page_setup(sheet, opts) when is_list(opts) do
+    Enum.each(opts, &validate_page_setup!/1)
+    %{sheet | page_setup: Keyword.merge(sheet.page_setup, opts)}
+  end
+
+  defp validate_page_setup!({:orientation, value}) when value in [:portrait, :landscape], do: :ok
+
+  defp validate_page_setup!({:orientation, value}) do
+    raise ArgumentError,
+          "page setup :orientation must be :portrait or :landscape, got: #{inspect(value)}"
+  end
+
+  defp validate_page_setup!({key, value})
+       when key in [:fit_to_width, :fit_to_height] and is_integer(value) and value >= 0,
+       do: :ok
+
+  defp validate_page_setup!({key, value}) when key in [:fit_to_width, :fit_to_height] do
+    raise ArgumentError,
+          "page setup #{inspect(key)} must be a non-negative integer, got: #{inspect(value)}"
+  end
+
+  defp validate_page_setup!({key, _value}) do
+    raise ArgumentError,
+          "unknown page setup option #{inspect(key)}; known options: #{inspect(@page_setup_keys)}"
+  end
+
+  @spec autofit_col_widths(Sheet.t(), Keyword.t()) :: Sheet.t()
+  @doc ~S"""
+  Sets each column's width from its widest cell.
+
+  This is an estimate from character counts, not a measurement of rendered
+  text: Excel only knows real widths once it lays the sheet out. Text and
+  numbers count their characters as written (a number format that adds
+  thousands separators or a currency sign is not accounted for), dates count
+  by their format, and formulas get a fixed allowance since their result is
+  not known here.
+
+  Widths are set for every column that has a non-blank cell, replacing widths
+  set earlier. Call `set_col_width/3` afterwards to pin individual columns.
+
+  ## Options
+
+    - `padding`: characters added to every column (default `0`).
+    - `min`, `max`: bounds for the resulting width.
+
+  ## Examples
+
+      iex> sheet = %Elixlsx.Sheet{rows: [["Name", "Amount"], ["Alexander", 12.5]]}
+      iex> Elixlsx.Sheet.autofit_col_widths(sheet, padding: 2).col_widths
+      %{1 => 11, 2 => 8}
+
+  """
+  def autofit_col_widths(sheet, opts \\ []) do
+    padding = Keyword.get(opts, :padding, 0)
+    min = Keyword.get(opts, :min, 0)
+    max = Keyword.get(opts, :max)
+
+    widths =
+      Enum.reduce(sheet.rows, %{}, fn row, acc ->
+        row
+        |> Enum.with_index(1)
+        |> Enum.reduce(acc, fn {cell, col}, inner ->
+          Map.update(inner, col, cell_display_len(cell), &max(&1, cell_display_len(cell)))
+        end)
+      end)
+
+    # A column holding only blanks keeps the default width.
+    widths =
+      for {col, len} <- widths, len > 0, into: %{} do
+        width = max(len + padding, min)
+        {col, if(max, do: min(width, max), else: width)}
+      end
+
+    update_in(sheet.col_widths, &Map.merge(&1, widths))
+  end
+
+  @formula_len 18
+  @other_len 8
+
+  defp cell_display_len(cell) do
+    {content, props} = Elixlsx.Cell.normalize(cell)
+
+    cond do
+      is_nil(content) or content == :empty -> 0
+      props[:datetime] -> 18
+      props[:yyyymmdd] -> 14
+      props[:yyyymm] -> 10
+      is_binary(content) -> String.length(content)
+      is_integer(content) or is_float(content) -> content |> to_string() |> String.length()
+      match?({:formula, _}, content) or match?({:formula, _, _}, content) -> @formula_len
+      true -> @other_len
+    end
   end
 end
